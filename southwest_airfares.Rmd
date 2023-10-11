@@ -1,0 +1,109 @@
+---
+title: "Model on Airfare for SW Airlines"
+author: "rodrick"
+date: '2022-07-14'
+output: html_document
+---
+
+```{r}
+airfare <- read.csv("Route-Airfares.csv")
+head(airfare,n=5)
+```
+```{r}
+airfare <- airfare[,-c(1:2)]
+head(airfare,n=5)
+```
+```{r}
+library(fastDummies)
+dummy_airfare <- dummy_cols(airfare[,c(3:4,10:11)],remove_first_dummy=TRUE)
+dummy_airfare <- dummy_airfare[,-c(1:4)]
+airfare <- cbind(airfare,dummy_airfare)
+airfare <- airfare[,-c(3:4,10:11)]
+head(airfare,n=5)
+```
+```{r}
+library(MASS)
+linear_model <- lm(FARE~.,data=airfare)
+options(scipen=999)
+summary(linear_model)
+step_model <- stepAIC(linear_model,direction="backward",trace=FALSE)
+summary(step_model)
+```
+#applying log transformation to numerical variables and repeating stepwise regression
+```{r}
+log_airfare <- log(airfare[,c(1:10)])
+# clear rows with Infinity
+log_airfare <- log_airfare[!is.infinite(rowSums(log_airfare)),]
+log_linear_model <- lm(FARE~.,data=log_airfare)
+summary(log_linear_model)
+options(scipen=999)
+log_step_model <- stepAIC(linear_model,direction="backward",trace=FALSE)
+summary(log_step_model)
+```
+```{r}
+#install.packages("AICcmodavg")
+library(AICcmodavg)
+models <- list(linear_model,step_model,log_linear_model,log_step_model)
+model.names <- c("Linear Regressor","Stepwise Regressor","Linear Regressor with Log","Stepwise Regressor with Log")
+aictab(cand.set=models,modnames=model.names)
+```
+# K: the value of K shows the number of parameters required by the model. (Default value of 2 shows one parameter)
+# AICc: information score of the model. c indicates that the AIC value has been corrected for small sample sizes. The smaller the AICc value, the better the model
+# Delta_AICc: Difference between the best model and the model being compared. Lower value is preferred
+# AICcWt: Proportion of total amount of predictive power explained by full set of models contained in the model being assessed. Value ranges between 0 and 1
+# Cum.Wt: Sum of the AICc weights. Best score is close to 100%
+# LL: Log Likelihood describes the model, given the data. AIC is calculated from LL and K
+The aictab display the best model on top of the list, which means that Linear Regressor with log transformation is the best model
+```{r}
+summary(log_linear_model)
+```
+F-statistic (F=229.3 with p-value less than 0.01) is statistically significant. This means that the variables in the linear regression model are useful in explaining FARE prices. The adjusted R square shows the model is 83.12% of the total variation in FARE prices. The log transformation is to normalize the continuous numerical variables into a symmetrical distribution.
+
+Among the individual coefficients, all the independent variables are statistically significant except for the COUPON and NEW variables. Out of the significant coefficients, HI, S_INCOME, E_INCOME, S_POP, E_POP and DISTANCE have a positive association with FARE. This means that the Herfindel Index, average personal income and population for Source/ Destination cities and distances between their ports bring a positive change towards FARE prices.
+
+However, FARE can be influenced by negative association as well. Variables like PAX, VACATION_YES, SW_Yes, SLOT_Free and GATE_FREE will impact FARE inversely. This means that an increase in the number of passengers flying, flying vacation route, no slot congestion, no gate congestion will reduce the FARE price by a degree and vice versa.
+```{r}
+# splitting data into train and test sets
+set.seed(101)
+train_prt <- sample.split(log_airfare,SplitRatio=0.65)
+train_df <- subset(log_airfare,train_prt==TRUE)
+test_df <- subset(log_airfare,train_prt==FALSE)
+```
+```{r}
+# fit the best model with training data
+log_linear_model <- lm(FARE~.,data=train_df)
+# predict the result
+preds <- predict(log_linear_model,test_df)
+```
+```{r}
+# display the first 6 rows of predicted and actual values and residuals
+err_df <- data.frame(Actual=test_df$FARE,Prediction=preds,Residual=test_df$FARE-preds)
+head(err_df,n=6)
+```
+```{r}
+write_json(head(err_df,n=6), "output.json")
+# histogram for the residuals of the prediction model
+hist(err_df$Residual,c="Blue")
+```
+# out-of-sample data
+```{r}
+nSW_set <- data.frame(COUPON=1.202,NEW=3,HI=4442.141,S_INCOME=28760,E_INCOME=27664,S_POP=4557004,E_POP=3195503,DISTANCE=1976,PAX=12782,VACATION_Yes=0,SW_Yes=0,SLOT_Free=1,GATE_Free=1)
+head(nSW_set,n=6)
+```
+# predict the average FARE price for the sample above
+```{r}
+sprintf("Average FARE price without SW: %.2f",predict(log_linear_model,nSW_set))
+```
+# predict the same if SouthWest Airlines were flying this route
+```{r}
+SW_set <- data.frame(COUPON=1.202,NEW=3,HI=4442.141,S_INCOME=28760,E_INCOME=27664,S_POP=4557004,E_POP=3195503,DISTANCE=1976,PAX=12782,VACATION_Yes=0,SW_Yes=1,SLOT_Free=1,GATE_Free=1)
+sprintf("Reduction in average FARE price with SW: %.2f",predict(log_linear_model,nSW_set)-predict(log_linear_model,SW_set))
+```
+# Managerial Implications
+If we consider 3 new entrants and Herfindel index to be 4442, our model shows the average price for a one coupon flight between unslotted, ungated ports of cities each having a population of 3-4 million with average income of 28k, separated by a distance of about 1980 miles flying a normal route via SouthWest Airlines will cost 36 cents less than other airlines. This sample shows the price of average FARE for a specific flight arrangement, it may vary depending on seasonal conditions 
+
+# Conceptual and Technical Aspects
+As SW Airlines are looking to enter the frenzy market of travel with new routes and services, the company will have to position itself among its competitors with a good business model.
+SW Airlines would gain a competitive advantage over reduced average FARE price because customers love a good deal on travel. As number of passengers flying increases, the FARE price will go lower, whereas, if the number is too low, the FARE prices go higher
+The population's capacity, average income, distance between ports and number of passengers will matter during prediction but may be same for each carrier and cannot explain the presence or absence of SW Airlines carriers.
+The difference between SW Airlines and others is not the price but their coupon service which provides more value to the customer because of its non-stop flight, economic service. Additionally, their one-stop flights will provide further cost savings per person especially if the competitors provide non-stop flights.
